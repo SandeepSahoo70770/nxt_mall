@@ -33,6 +33,7 @@ NxT-Mall/
 ## ⚙️ Getting Started
 
 ### Frontend
+
 ```bash
 cd frontend
 npm install
@@ -40,6 +41,7 @@ npm run dev
 ```
 
 ### Backend
+
 ```bash
 cd backend
 pip install -r requirements.txt
@@ -53,3 +55,11 @@ uvicorn main:app --reload
 ---
 
 ⭐ If you like this project, consider giving it a star!
+
+## our team
+
+    -Sandeep🦬
+    -chinmayee🐻
+    -anita🦌
+    -surya🐻
+    -soumya✔️
