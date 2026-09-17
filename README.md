@@ -60,6 +60,6 @@ uvicorn main:app --reload
 
     -Sandeep🦬
     -chinmayee🐻
-    -anita🦌
+    -ankita🦌
     -surya🐻
     -soumya✔️
