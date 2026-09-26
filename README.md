@@ -62,4 +62,4 @@ uvicorn main:app --reload
     -chinmayee🐻
     -ankita🦌
     -surya🐻
-    -soumya✔️
+    -soumya😄
