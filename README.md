@@ -58,8 +58,8 @@ uvicorn main:app --reload
 
 ## our team
 
-    -Sandeep🦬
-    -chinmayee🐻
-    -ankita🦌
-    -surya🐻
-    -soumya😄
+    -Sandeep sahoo🦬
+    -chinmayee routray🐻
+    -ankita abhilipsa🦌
+    -surya behera🐻
+    -soumya behera😄
