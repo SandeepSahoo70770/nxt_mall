@@ -57,7 +57,6 @@ uvicorn main:app --reload
 ⭐ If you like this project, consider giving it a star!
 
 ## our team
-
     -Sandeep sahoo🦬
     -chinmayee routray🐻
     -ankita abhilipsa🦌
