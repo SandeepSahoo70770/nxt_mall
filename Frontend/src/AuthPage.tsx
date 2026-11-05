@@ -6,13 +6,20 @@ export default function AuthPage() {
   const [mode, setMode] = useState<'signup' | 'login'>('signup')
   const [showPassword, setShowPassword] = useState(false)
   const [message, setMessage] = useState('')
-  const [mobile, setMobile] = useState('')
-  const [phoneOpen, setPhoneOpen] = useState(false)
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const submit = (event: FormEvent<HTMLFormElement>) => {
+  const apiBase = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    setMessage('Authentication is not connected yet. Your details have not been sent.')
+    setMessage('')
+    try {
+      const response = await fetch(`${apiBase}/api/auth/${mode === 'signup' ? 'signup' : 'login'}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) })
+      const result = await response.json() as { access_token?: string; detail?: string; user?: unknown }
+      if (!response.ok || !result.access_token) throw new Error(result.detail || 'Unable to authenticate.')
+      localStorage.setItem('nxtmall_access_token', result.access_token)
+      if (result.user) localStorage.setItem('nxtmall_user', JSON.stringify(result.user))
+      window.location.assign('/')
+    } catch (error) { setMessage(error instanceof Error ? error.message : 'Cannot reach the authentication service.') }
   }
   return <main className="auth-page">
     <section className="auth-layout" aria-label="NxT Mall account access">
@@ -32,13 +39,6 @@ export default function AuthPage() {
           <div className="password-field"><input id="auth-password" className="auth-input" type={showPassword?'text':'password'} minLength={8} autoComplete={mode==='login'?'current-password':'new-password'} required value={password} onChange={e=>setPassword(e.target.value)} placeholder="At least 8 characters"/><button type="button" aria-label={showPassword?'Hide password':'Show password'} onClick={()=>setShowPassword(!showPassword)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.2-6 9.5-6 9.5 6 9.5 6-3.2 6-9.5 6-9.5-6-9.5-6Z"/><circle cx="12" cy="12" r="2.5"/></svg></button></div>
           <button className="auth-submit" type="submit">{mode==='signup'?'Create Account':'Log In'} <span aria-hidden="true">→</span></button>
         </form>
-        <div className="auth-divider"><span>or continue with</span></div>
-        <div className="auth-alternatives">
-          <button className="social-button google-button" onClick={()=>setMessage('Google sign-in is not configured yet.')}><span className="google-g">G</span>Continue with Google</button>
-          <button className="social-button facebook-button" onClick={()=>setMessage('Facebook sign-in is not configured yet.')}><span className="facebook-f">f</span>Continue with Facebook</button>
-          <button className="social-button phone-option" aria-expanded={phoneOpen} onClick={()=>{setPhoneOpen(!phoneOpen);setMessage('')}}><span aria-hidden="true">＋91</span>Continue with Phone</button>
-          {phoneOpen&&<div className="phone-field"><span>🇮🇳 &nbsp;+91</span><input inputMode="numeric" autoComplete="tel-national" maxLength={10} value={mobile} onChange={e=>setMobile(e.target.value.replace(/\D/g,'').slice(0,10))} placeholder="Enter 10-digit mobile number" aria-label="10-digit Indian mobile number"/><button type="button" className="otp-button" onClick={()=>setMessage(mobile.length===10?'OTP delivery is not connected yet.':'Enter a valid 10-digit mobile number.')}>Send OTP</button></div>}
-        </div>
         {message&&<p className="auth-message" role="status">{message}</p>}
         <p className="auth-terms">By continuing, you agree to NxT Mall’s <a href="#terms">Terms of Service</a> and <a href="#privacy">Privacy Policy</a>.</p>
         <p className="auth-switch">{mode==='signup'?'Already have an account?':'New to NxT Mall?'} <button onClick={()=>{setMode(mode==='signup'?'login':'signup');setMessage('')}}>{mode==='signup'?'Log in':'Create an account'}</button></p>

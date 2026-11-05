@@ -1,9 +1,14 @@
 """NxT Mall API. Persistent commerce data is stored in MySQL."""
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 import os
+import secrets
 from typing import Generator
 
+import jwt
+from pwdlib import PasswordHash
 from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi.security import OAuth2PasswordBearer
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import Boolean, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, create_engine, select
@@ -81,6 +86,14 @@ class HeroSlide(Base):
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
 
 
+class User(Base):
+    __tablename__ = "users"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    email: Mapped[str] = mapped_column(String(254), unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(String(255))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
 def get_db() -> Generator[Session, None, None]:
     with SessionLocal() as db:
         yield db
@@ -94,6 +107,60 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title="NxT Mall API", version="1.0.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=os.getenv("CORS_ORIGINS", "http://localhost:5173").split(","), allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+
+JWT_SECRET = os.getenv("JWT_SECRET", "development-only-change-this-secret")
+JWT_EXPIRE_MINUTES = int(os.getenv("JWT_EXPIRE_MINUTES", "60"))
+password_hasher = PasswordHash.recommended()
+bearer_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
+
+
+class Credentials(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=8, max_length=128)
+
+
+def issue_token(user: User) -> str:
+    now = datetime.now(timezone.utc)
+    claims = {"sub": str(user.id), "email": user.email, "iat": now, "exp": now + timedelta(minutes=JWT_EXPIRE_MINUTES), "jti": secrets.token_urlsafe(12)}
+    return jwt.encode(claims, JWT_SECRET, algorithm="HS256")
+
+
+def require_user(token: str = Depends(bearer_scheme), db: Session = Depends(get_db)) -> User:
+    try:
+        claims = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
+        user = db.get(User, int(claims["sub"]))
+    except (jwt.InvalidTokenError, KeyError, TypeError, ValueError):
+        raise HTTPException(401, "Invalid or expired token", headers={"WWW-Authenticate": "Bearer"})
+    if user is None or not user.is_active:
+        raise HTTPException(401, "User is unavailable", headers={"WWW-Authenticate": "Bearer"})
+    return user
+
+
+@app.post("/api/auth/signup", status_code=201, tags=["authentication"])
+def signup(payload: Credentials, db: Session = Depends(get_db)):
+    email = str(payload.email).lower()
+    if db.scalar(select(User).where(User.email == email)):
+        raise HTTPException(409, "An account with this email already exists")
+    user = User(email=email, password_hash=password_hasher.hash(payload.password))
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return {"access_token": issue_token(user), "token_type": "bearer", "expires_in": JWT_EXPIRE_MINUTES * 60, "user": {"id": user.id, "email": user.email}}
+
+
+@app.post("/api/auth/login", tags=["authentication"])
+def login(payload: Credentials, db: Session = Depends(get_db)):
+    user = db.scalar(select(User).where(User.email == str(payload.email).lower()))
+    if not user or not password_hasher.verify(payload.password, user.password_hash):
+        raise HTTPException(401, "Email or password is incorrect", headers={"WWW-Authenticate": "Bearer"})
+    if not user.is_active:
+        raise HTTPException(403, "Account is disabled")
+    return {"access_token": issue_token(user), "token_type": "bearer", "expires_in": JWT_EXPIRE_MINUTES * 60, "user": {"id": user.id, "email": user.email}}
+
+
+@app.get("/api/auth/me", tags=["authentication"])
+def current_user(user: User = Depends(require_user)):
+    return {"id": user.id, "email": user.email}
 
 
 class CartRequest(BaseModel):
