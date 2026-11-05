@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 import brandMark from './assets/nxt-mark.png'
+import AuthPage from './AuthPage'
 import './App.css'
 
 type Product = {
@@ -79,6 +80,7 @@ function Icon({ name, size = 20 }: { name: string; size?: number }) {
 }
 
 function App() {
+  if (window.location.pathname === '/auth') return <AuthPage />
   const [activeCategory, setActiveCategory] = useState('All products')
   const [query, setQuery] = useState('')
   const [cartCount, setCartCount] = useState(0)
@@ -147,7 +149,7 @@ function App() {
             <button type="submit">Search <Icon name="search" size={16} /></button>
           </form>
           <div className="header-actions">
-            <a className="header-action account-action" href="#footer"><Icon name="user" /><span>Login / Register</span></a>
+            <a className="header-action account-action" href="/auth"><Icon name="user" /><span>Login / Register</span></a>
             <button className="header-action" onClick={() => { setWishlistView(true); setShowAllProducts(true); document.getElementById('shop')?.scrollIntoView({ behavior: 'smooth' }) }} aria-label={`Wishlist, ${wishlist.size} saved items`}><span className="action-icon"><Icon name="heart" /><i>{wishlist.size}</i></span><span>Wishlist</span></button>
             <button className="header-action" onClick={() => setCartOpen(true)} aria-label={`Cart, ${cartCount} items`}><span className="action-icon"><Icon name="cart" /><i>{cartCount}</i></span><span>Cart</span></button>
           </div>
