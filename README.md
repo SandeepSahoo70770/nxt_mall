@@ -1,64 +1,17 @@
-# 🛒 NxT Mall
+# NxT Mall
 
-A modern e-commerce web application built with React, FastAPI, and PostgreSQL.
+NxT Mall is an e-commerce storefront built with React, TypeScript, Vite, FastAPI, and MySQL.
 
-## 🎯 Goal
+## Project structure
 
-The goal of **NxT Mall** is to build a modern, user-friendly e-commerce platform where users can browse products, manage their cart, and place orders efficiently.
+- `Frontend/`: responsive storefront and JWT login/signup page.
+- `Backend/`: FastAPI API, SQLAlchemy database schema, and catalog seed command.
+- `specs/`: product requirements and design notes.
 
-## 🚀 Tech Stack
+## Run locally
 
-- **Frontend:** React
-- **Backend:** FastAPI
-- **Database:** PostgreSQL
+1. Follow [Backend MySQL setup](Backend/README.md) to create the database, configure `Backend/.env`, sync Python dependencies, seed the existing storefront catalog, and start FastAPI.
+2. Copy `Frontend/.env.example` to `Frontend/.env.local`.
+3. In `Frontend/`, run `npm install` and `npm run dev`.
 
-## ✨ Features
-
-- User Authentication
-- Product Browsing
-- Product Search
-- Shopping Cart
-- Order Management
-- Admin Product Management
-
-## 📁 Project Structure
-
-```text
-NxT-Mall/
-├── frontend/     # React
-├── backend/      # FastAPI
-└── README.md
-```
-
-## ⚙️ Getting Started
-
-### Frontend
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-### Backend
-
-```bash
-cd backend
-pip install -r requirements.txt
-uvicorn main:app --reload
-```
-
-## 👨‍💻 Developer
-
-**Sandeep Sahoo**
-
----
-
-⭐ If you like this project, consider giving it a star!
-
-## our team
-    -Sandeep sahoo🦬
-    -chinmayee routray🐻
-    -ankita abhilipsa🦌
-    -surya behera🐻
-    -soumya behera😄
+Products, categories, hero slides, cart, wishlist, newsletter subscriptions, and JWT accounts use the backend's MySQL database. Checkout and order fulfillment are not implemented yet.

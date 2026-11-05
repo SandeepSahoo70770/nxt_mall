@@ -5,6 +5,7 @@ import os
 import secrets
 from typing import Generator
 
+from dotenv import load_dotenv
 import jwt
 from pwdlib import PasswordHash
 from fastapi import Depends, FastAPI, HTTPException, Query
@@ -14,6 +15,8 @@ from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import Boolean, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, create_engine, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker
 
+
+load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL", "mysql+pymysql://nxtmall:nxtmall@127.0.0.1:3306/nxt_mall?charset=utf8mb4")
 engine = create_engine(DATABASE_URL, pool_pre_ping=True, pool_recycle=1800)

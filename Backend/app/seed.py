@@ -20,7 +20,7 @@ PRODUCTS = [
 ]
 SLIDES = [
     ("BIG SAVINGS, BIG SMILES", "Everything You Need", "Under ", "One Roof", "Fashion • Electronics • Home • Beauty • More", "/nxt-design/hero-under-one-roof.png", "A colorful collection of NxT Mall products", 0),
-    ("EVERYTHING YOU NEED, ALL IN ONE PLACE", "Shop More,", "", "Live Better", "Top brands • Best deals • Fast delivery", "/nxt-design/hero-lifestyle.png", "A shopper discovering products from NxT Mall", 1),
+    ("EVERYTHING YOU NEED, ALL IN ONE PLACE", "Shop More,", "", "Live Better", "Top brands • Best deals • Fast delivery", "/nxt-design/hero-shop-more.png", "A shopper discovering products from NxT Mall", 1),
 ]
 
 def seed() -> None:

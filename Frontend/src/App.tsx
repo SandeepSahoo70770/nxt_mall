@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 import brandMark from './assets/nxt-mark.png'
 import AuthPage from './AuthPage'
@@ -17,48 +17,20 @@ type Product = {
   image: string
 }
 
-const products: Product[] = [
-  { id: 1, name: 'Wireless Earbuds', category: 'Electronics', description: 'Bluetooth 5.3 | Noise Cancelling', price: 3999, oldPrice: 6499, rating: '4.5', reviews: '1.2k', discount: '-35%', image: 'photo-1606220945770-b5b6c2c55bf1' },
-  { id: 2, name: 'Smart Watch', category: 'Electronics', description: 'Fitness Tracker | Heart Rate', price: 2999, oldPrice: 3999, rating: '4.3', reviews: '856', discount: '-25%', image: 'photo-1523275335684-37898b6baf30' },
-  { id: 3, name: 'Running Shoes', category: 'Sports & Outdoors', description: 'Lightweight | Breathable', price: 1499, oldPrice: 1999, rating: '4.6', reviews: '2.3k', discount: '-20%', image: 'photo-1552346154-21d32810aba3' },
-  { id: 4, name: 'Backpack', category: 'Fashion', description: 'Stylish | Durable | Spacious', price: 1399, oldPrice: 1999, rating: '4.4', reviews: '987', discount: '-30%', image: 'photo-1553062407-98eeb64c6a62' },
-  { id: 5, name: 'Ceramic Morning Set', category: 'Home & Living', description: 'Everyday ceramic coffee set', price: 3499, oldPrice: 4299, rating: '4.9', reviews: '63', image: 'photo-1514228742587-6b1558fcca3d' },
-  { id: 6, name: 'Sculpted Sun Glasses', category: 'Beauty', description: 'Lightweight | UV protection', price: 4799, oldPrice: 5499, rating: '4.6', reviews: '51', image: 'photo-1511499767150-a48a237f0083' },
-  { id: 7, name: 'Instant Film Camera', category: 'Electronics', description: 'Instant prints | Retro style', price: 9899, oldPrice: 11999, rating: '4.8', reviews: '142', image: 'photo-1516035069371-29a1b244cc32' },
-  { id: 8, name: 'Soft Form Lounge Chair', category: 'Home & Living', description: 'A softer seat for slow days', price: 15699, oldPrice: 19999, rating: '4.9', reviews: '37', image: 'photo-1506439773649-6e0eb8cfb237' },
-]
+type Category = { id: number; name: string; image: string }
+type HeroSlide = { eyebrow: string; lineOne: string; lineTwo: string; highlight: string; description: string; image: string; alt: string }
+type CartLine = { product: Product; quantity: number }
 
-const categories = [
-  { name: 'Fashion', image: 'category-fashion.png' },
-  { name: 'Electronics', image: 'category-electronics.png' },
-  { name: 'Home & Living', image: 'category-home-living.png' },
-  { name: 'Beauty', image: 'category-beauty.png' },
-  { name: 'Sports & Outdoors', image: 'category-sports-outdoors.png' },
-  { name: 'Toys & Games', image: 'category-toys-games.png' },
-  { name: 'Groceries', image: 'category-groceries.png' },
-  { name: 'Gifts & More', image: 'category-gifts.png' },
-]
-
-const heroSlides = [
-  {
-    eyebrow: 'BIG SAVINGS, BIG SMILES',
-    lineOne: 'Everything You Need',
-    lineTwo: 'Under ',
-    highlight: 'One Roof',
-    description: 'Fashion  •  Electronics  •  Home  •  Beauty  •  More',
-    image: '/nxt-design/hero-under-one-roof.png',
-    alt: 'A colorful collection of NxT Mall products',
-  },
-  {
-    eyebrow: 'EVERYTHING YOU NEED, ALL IN ONE PLACE',
-    lineOne: 'Shop More,',
-    lineTwo: '',
-    highlight: 'Live Better',
-    description: 'Top brands  •  Best deals  •  Fast delivery',
-    image: '/nxt-design/hero-shop-more.png',
-    alt: 'A shopper discovering products from NxT Mall',
-  },
-]
+const apiBase = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+const getSessionKey = () => {
+  let key = localStorage.getItem('nxtmall_session_key')
+  if (!key) {
+    key = `nxtmall_${crypto.randomUUID()}`
+    localStorage.setItem('nxtmall_session_key', key)
+  }
+  return key
+}
+const sessionQuery = () => `session_key=${encodeURIComponent(getSessionKey())}`
 
 const imageUrl = (id: string, width = 600) => `https://images.unsplash.com/${id}?auto=format&fit=crop&w=${width}&q=85`
 const formatINR = (amount: number) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(amount)
@@ -81,9 +53,14 @@ function Icon({ name, size = 20 }: { name: string; size?: number }) {
 
 function App() {
   if (window.location.pathname === '/auth') return <AuthPage />
+  const [products, setProducts] = useState<Product[]>([])
+  const [categories, setCategories] = useState<Category[]>([])
+  const [heroSlides, setHeroSlides] = useState<HeroSlide[]>([])
+  const [cart, setCart] = useState<CartLine[]>([])
+  const [catalogLoading, setCatalogLoading] = useState(true)
+  const [catalogError, setCatalogError] = useState('')
   const [activeCategory, setActiveCategory] = useState('All products')
   const [query, setQuery] = useState('')
-  const [cartCount, setCartCount] = useState(0)
   const [cartOpen, setCartOpen] = useState(false)
   const [mobileNav, setMobileNav] = useState(false)
   const [subscribed, setSubscribed] = useState(false)
@@ -92,6 +69,45 @@ function App() {
   const [showAllProducts, setShowAllProducts] = useState(false)
   const [wishlist, setWishlist] = useState<Set<number>>(new Set())
   const [wishlistView, setWishlistView] = useState(false)
+
+  useEffect(() => {
+    let active = true
+    const load = async () => {
+      try {
+        const [productResponse, categoryResponse, slideResponse, cartResponse, wishlistResponse] = await Promise.all([
+          fetch(`${apiBase}/api/products`),
+          fetch(`${apiBase}/api/categories`),
+          fetch(`${apiBase}/api/hero-slides`),
+          fetch(`${apiBase}/api/cart?${sessionQuery()}`),
+          fetch(`${apiBase}/api/wishlist?${sessionQuery()}`),
+        ])
+        if (![productResponse, categoryResponse, slideResponse, cartResponse, wishlistResponse].every((response) => response.ok)) {
+          throw new Error('Could not load storefront data from the database.')
+        }
+        const [productData, categoryData, slideData, cartData, wishlistData] = await Promise.all([
+          productResponse.json() as Promise<Product[]>,
+          categoryResponse.json() as Promise<Category[]>,
+          slideResponse.json() as Promise<HeroSlide[]>,
+          cartResponse.json() as Promise<{ items: CartLine[] }>,
+          wishlistResponse.json() as Promise<{ productIds: number[] }>,
+        ])
+        if (!active) return
+        setProducts(productData)
+        setCategories(categoryData)
+        setHeroSlides(slideData)
+        setCart(cartData.items)
+        setWishlist(new Set(wishlistData.productIds))
+      } catch (error) {
+        if (active) setCatalogError(error instanceof Error ? error.message : 'Could not connect to the storefront database.')
+      } finally {
+        if (active) setCatalogLoading(false)
+      }
+    }
+    void load()
+    return () => { active = false }
+  }, [])
+
+  const cartCount = cart.reduce((count, item) => count + item.quantity, 0)
 
   const filteredProducts = useMemo(() => {
     let result = products.filter((product) =>
@@ -123,13 +139,56 @@ function App() {
     document.getElementById('shop')?.scrollIntoView({ behavior: 'smooth' })
   }
 
-  const toggleWishlist = (id: number) => {
-    setWishlist((saved) => {
-      const next = new Set(saved)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
+  const toggleWishlist = async (id: number) => {
+    try {
+      const response = await fetch(`${apiBase}/api/wishlist/${id}?${sessionQuery()}`, { method: 'PUT' })
+      if (!response.ok) throw new Error('Wishlist could not be updated.')
+      const result = await response.json() as { saved: boolean }
+      setWishlist((saved) => {
+        const next = new Set(saved)
+        if (result.saved) next.add(id)
+        else next.delete(id)
+        return next
+      })
+    } catch (error) {
+      setCatalogError(error instanceof Error ? error.message : 'Wishlist could not be updated.')
+    }
+  }
+
+  const addToCart = async (id: number) => {
+    try {
+      const response = await fetch(`${apiBase}/api/cart?${sessionQuery()}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ product_id: id, quantity: 1 }),
+      })
+      if (!response.ok) throw new Error('Could not add this product to your cart.')
+      const result = await response.json() as { items: CartLine[] }
+      setCart(result.items)
+    } catch (error) {
+      setCatalogError(error instanceof Error ? error.message : 'Could not update your cart.')
+    }
+  }
+
+  const removeFromCart = async (id: number) => {
+    try {
+      const response = await fetch(`${apiBase}/api/cart/${id}?${sessionQuery()}`, { method: 'DELETE' })
+      if (!response.ok) throw new Error('Could not update your cart.')
+      const result = await response.json() as { items: CartLine[] }
+      setCart(result.items)
+    } catch (error) {
+      setCatalogError(error instanceof Error ? error.message : 'Could not update your cart.')
+    }
+  }
+
+  const subscribe = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const form = new FormData(event.currentTarget)
+    try {
+      const response = await fetch(`${apiBase}/api/newsletter`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: form.get('email') }) })
+      if (!response.ok) throw new Error('Subscription could not be saved.')
+      setSubscribed(true)
+    } catch (error) {
+      setCatalogError(error instanceof Error ? error.message : 'Subscription could not be saved.')
+    }
   }
 
   const hero = heroSlides[heroIndex]
@@ -168,7 +227,8 @@ function App() {
       </header>
 
       <main>
-        <section className="hero page-container" aria-label="Featured deals">
+        {catalogError && <p className="empty-results" role="status">{catalogError}</p>}
+        {hero && <section className="hero page-container" aria-label="Featured deals">
           <div className="hero-copy">
             <div className="hero-eyebrow">{hero.eyebrow}</div>
             <h1><span>{hero.lineOne}</span><span>{hero.lineTwo}<em>{hero.highlight}</em></span></h1>
@@ -179,7 +239,7 @@ function App() {
             </div>
           </div>
           <div className="hero-art"><img src={hero.image} alt={hero.alt} /><button className="hero-arrow hero-prev" onClick={() => setHeroIndex((heroIndex + heroSlides.length - 1) % heroSlides.length)} aria-label="Previous banner">‹</button><button className="hero-arrow hero-next" onClick={() => setHeroIndex((heroIndex + 1) % heroSlides.length)} aria-label="Next banner">›</button></div>
-        </section>
+        </section>}
 
         <section className="trust-strip page-container" aria-label="Shopping benefits">
           <div><Icon name="truck" size={30} /><span><strong>Free Shipping</strong><small>On orders over ₹999</small></span></div>
@@ -203,12 +263,14 @@ function App() {
           <div className="featured-layout">
             <a className="limited-offer" id="offer" href="#shop" onClick={() => { setShowAllProducts(true); setActiveCategory('All products') }} aria-label="Shop the limited time offer, up to 50 percent off"><img src="/nxt-design/promo-limited-50.png" alt="Limited Time Offer: Up to 50% OFF on top brands. Shop Now." /></a>
             <div className="product-grid">
+              {catalogLoading && <div className="empty-results" role="status">Loading products…</div>}
+              {!catalogLoading && catalogError && products.length === 0 && <div className="empty-results" role="status"><strong>Store data is unavailable.</strong><span>Start the API and connect MySQL to load the catalog.</span></div>}
               {visibleProducts.map((product) => <article className="product-card" key={product.id}>
                 <div className="product-image"><img src={product.image.startsWith('/') || product.image.startsWith('http') ? product.image : imageUrl(product.image, 800)} alt={product.name} loading="lazy" />{product.discount && <span className="discount-badge">{product.discount}</span>}<button className={wishlist.has(product.id) ? 'wishlist-button saved' : 'wishlist-button'} onClick={() => toggleWishlist(product.id)} aria-label={`${wishlist.has(product.id) ? 'Remove from' : 'Add to'} wishlist: ${product.name}`}><Icon name="heart" size={19} /></button></div>
                 <div className="product-information"><div><p className="product-category">{product.category}</p><h3>{product.name}</h3><p className="product-description">{product.description}</p><div className="rating"><span>★</span><strong>{product.rating}</strong><small>({product.reviews})</small></div></div><div className="product-price"><strong>{formatINR(product.price)}</strong><del>{formatINR(product.oldPrice)}</del></div></div>
-                <button className="add-to-cart" onClick={() => setCartCount((count) => count + 1)}><Icon name="cart" size={16} /> Add to Cart</button>
+                <button className="add-to-cart" onClick={() => void addToCart(product.id)}><Icon name="cart" size={16} /> Add to Cart</button>
               </article>)}
-              {visibleProducts.length === 0 && <div className="empty-results"><strong>{wishlistView ? 'Your wishlist is empty.' : 'No products found.'}</strong><span>Try another category or search.</span><button onClick={() => { setQuery(''); setActiveCategory('All products'); setWishlistView(false); setShowAllProducts(false) }}>Show featured products</button></div>}
+              {!catalogLoading && !catalogError && visibleProducts.length === 0 && <div className="empty-results"><strong>{wishlistView ? 'Your wishlist is empty.' : 'No products found.'}</strong><span>Try another category or search.</span><button onClick={() => { setQuery(''); setActiveCategory('All products'); setWishlistView(false); setShowAllProducts(false) }}>Show featured products</button></div>}
             </div>
           </div>
         </section>
@@ -224,12 +286,12 @@ function App() {
           <div className="footer-column"><strong>Quick Links</strong><a href="#top">Home</a><a href="#categories">About Us</a><a href="#footer">Contact Us</a><a href="#footer">FAQs</a></div>
           <div className="footer-column"><strong>Customer Care</strong><a href="#footer">Help Center</a><a href="#footer">Track Order</a><a href="#footer">Shipping Policy</a><a href="#footer">Return Policy</a></div>
           <div className="footer-social"><strong>Follow Us</strong><div><a href="#footer" aria-label="Facebook">f</a><a href="#footer" aria-label="Instagram">◎</a><a href="#footer" aria-label="YouTube">▶</a><a href="#footer" aria-label="X">𝕏</a><a href="#footer" aria-label="Pinterest">p</a></div></div>
-          <div className="footer-newsletter"><strong>Subscribe to Our Newsletter</strong><p>Get the latest updates, offers and more.</p>{subscribed ? <div className="subscribe-success" role="status">Thanks for subscribing!</div> : <form onSubmit={(event) => { event.preventDefault(); setSubscribed(true) }}><input type="email" required aria-label="Email address" placeholder="Enter your email address" /><button aria-label="Subscribe"><Icon name="arrow" size={18} /></button></form>}</div>
+          <div className="footer-newsletter"><strong>Subscribe to Our Newsletter</strong><p>Get the latest updates, offers and more.</p>{subscribed ? <div className="subscribe-success" role="status">Thanks for subscribing!</div> : <form onSubmit={(event) => void subscribe(event)}><input name="email" type="email" required aria-label="Email address" placeholder="Enter your email address" /><button aria-label="Subscribe"><Icon name="arrow" size={18} /></button></form>}</div>
         </div>
         <div className="footer-bottom page-container"><span>© 2025 NxT Mall. All rights reserved.</span><span><a href="#footer">Privacy Policy</a><i /> <a href="#footer">Terms & Conditions</a></span></div>
       </footer>
 
-      {cartOpen && <div className="overlay" role="presentation" onClick={() => setCartOpen(false)}><aside className="cart-drawer" role="dialog" aria-modal="true" aria-label="Your shopping cart" onClick={(event) => event.stopPropagation()}><div className="drawer-heading"><div><span className="eyebrow">YOUR BAG</span><h2>Shopping Cart <small>({cartCount})</small></h2></div><button className="drawer-close" onClick={() => setCartOpen(false)} aria-label="Close cart"><Icon name="close" /></button></div>{cartCount === 0 ? <div className="cart-empty"><span className="empty-cart-icon"><Icon name="cart" size={28} /></span><strong>Your cart is empty</strong><p>Find something lovely for your everyday.</p><button className="drawer-shop" onClick={() => { setCartOpen(false); document.getElementById('shop')?.scrollIntoView({ behavior: 'smooth' }) }}>Continue Shopping <Icon name="arrow" size={16} /></button></div> : <div className="cart-filled"><div className="cart-feedback" role="status">{cartCount} {cartCount === 1 ? 'item' : 'items'} added to your cart.</div><div className="cart-total"><span>Shipping</span><strong>Calculated at checkout</strong></div><button className="drawer-shop" onClick={() => setCartOpen(false)}>Continue Shopping <Icon name="arrow" size={16} /></button></div>}<div className="drawer-note"><Icon name="shield" size={16} /> Secure checkout with trusted payment methods</div></aside></div>}
+      {cartOpen && <div className="overlay" role="presentation" onClick={() => setCartOpen(false)}><aside className="cart-drawer" role="dialog" aria-modal="true" aria-label="Your shopping cart" onClick={(event) => event.stopPropagation()}><div className="drawer-heading"><div><span className="eyebrow">YOUR BAG</span><h2>Shopping Cart <small>({cartCount})</small></h2></div><button className="drawer-close" onClick={() => setCartOpen(false)} aria-label="Close cart"><Icon name="close" /></button></div>{cartCount === 0 ? <div className="cart-empty"><span className="empty-cart-icon"><Icon name="cart" size={28} /></span><strong>Your cart is empty</strong><p>Find something lovely for your everyday.</p><button className="drawer-shop" onClick={() => { setCartOpen(false); document.getElementById('shop')?.scrollIntoView({ behavior: 'smooth' }) }}>Continue Shopping <Icon name="arrow" size={16} /></button></div> : <div className="cart-filled">{cart.map(({ product, quantity }) => <div className="cart-feedback" key={product.id}><span>{product.name} × {quantity}</span><strong>{formatINR(product.price * quantity)}</strong><button onClick={() => void removeFromCart(product.id)} aria-label={`Remove ${product.name} from cart`}>Remove</button></div>)}<div className="cart-total"><span>Subtotal</span><strong>{formatINR(cart.reduce((sum, item) => sum + item.product.price * item.quantity, 0))}</strong></div><button className="drawer-shop" onClick={() => setCartOpen(false)}>Continue Shopping <Icon name="arrow" size={16} /></button></div>}<div className="drawer-note"><Icon name="shield" size={16} /> Secure checkout with trusted payment methods</div></aside></div>}
     </div>
   )
 }
