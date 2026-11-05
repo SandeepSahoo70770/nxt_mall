@@ -12,6 +12,10 @@ FastAPI backend backed by MySQL. Products, categories, hero slides, cart items, 
 
 Set `CORS_ORIGINS` to a comma-separated list of allowed frontend origins. The default permits Vite at `http://localhost:5173`.
 
+## JWT email/password authentication
+
+Set a strong random `JWT_SECRET` in the environment. `POST /api/auth/signup` accepts `{ "email": "name@example.com", "password": "at-least-8-chars" }`; `POST /api/auth/login` accepts the same fields. Both return a bearer `access_token`, token type, expiry, and user summary. Send `Authorization: Bearer <access_token>` to `GET /api/auth/me`. Passwords are hashed with Argon2 and never returned. Signup rejects duplicate emails; login returns a generic invalid-credentials response. Tokens expire after `JWT_EXPIRE_MINUTES` (default 60).
+
 ## API
 
 - `GET /api/categories`
