@@ -57,6 +57,14 @@ function App() {
   const [categories, setCategories] = useState<Category[]>([])
   const [heroSlides, setHeroSlides] = useState<HeroSlide[]>([])
   const [cart, setCart] = useState<CartLine[]>([])
+  const [currentUser, setCurrentUser] = useState<{ id: number; email: string; full_name?: string | null; address?: string | null } | null>(() => {
+    try {
+      return JSON.parse(localStorage.getItem('nxtmall_user') || 'null') as { id: number; email: string } | null
+    } catch {
+      return null
+    }
+  })
+  const [profileOpen, setProfileOpen] = useState(false)
   const [catalogLoading, setCatalogLoading] = useState(true)
   const [catalogError, setCatalogError] = useState('')
   const [activeCategory, setActiveCategory] = useState('All products')
@@ -104,6 +112,29 @@ function App() {
       }
     }
     void load()
+    return () => { active = false }
+  }, [])
+
+  useEffect(() => {
+    const token = localStorage.getItem('nxtmall_access_token')
+    if (!token) return
+    let active = true
+    void fetch(`${apiBase}/api/auth/me`, { headers: { Authorization: `Bearer ${token}` } })
+      .then(async (response) => {
+        if (!response.ok) throw new Error('Session expired')
+        return await response.json() as { id: number; email: string; full_name?: string | null; address?: string | null }
+      })
+      .then((user) => {
+        if (!active) return
+        setCurrentUser(user)
+        localStorage.setItem('nxtmall_user', JSON.stringify(user))
+      })
+      .catch(() => {
+        if (!active) return
+        localStorage.removeItem('nxtmall_access_token')
+        localStorage.removeItem('nxtmall_user')
+        setCurrentUser(null)
+      })
     return () => { active = false }
   }, [])
 
@@ -191,6 +222,13 @@ function App() {
     }
   }
 
+  const logout = () => {
+    localStorage.removeItem('nxtmall_access_token')
+    localStorage.removeItem('nxtmall_user')
+    setCurrentUser(null)
+    setProfileOpen(false)
+  }
+
   const hero = heroSlides[heroIndex]
 
   return (
@@ -208,7 +246,9 @@ function App() {
             <button type="submit">Search <Icon name="search" size={16} /></button>
           </form>
           <div className="header-actions">
-            <a className="header-action account-action" href="/auth"><Icon name="user" /><span>Login / Register</span></a>
+            {currentUser
+              ? <div className="account-menu-wrap"><button className="header-action account-action account-icon-button" aria-label="Open account menu" aria-expanded={profileOpen} title="Account" onClick={() => setProfileOpen((open) => !open)}><Icon name="user" /></button>{profileOpen && <div className="account-popover"><strong>{currentUser.full_name || 'NxT Mall account'}</strong><span>{currentUser.email}</span>{currentUser.address && <small>{currentUser.address}</small>}<button onClick={logout}>Log out</button></div>}</div>
+              : <a className="header-action account-action" href="/auth"><Icon name="user" /><span>Login / Register</span></a>}
             <button className="header-action" onClick={() => { setWishlistView(true); setShowAllProducts(true); document.getElementById('shop')?.scrollIntoView({ behavior: 'smooth' }) }} aria-label={`Wishlist, ${wishlist.size} saved items`}><span className="action-icon"><Icon name="heart" /><i>{wishlist.size}</i></span><span>Wishlist</span></button>
             <button className="header-action" onClick={() => setCartOpen(true)} aria-label={`Cart, ${cartCount} items`}><span className="action-icon"><Icon name="cart" /><i>{cartCount}</i></span><span>Cart</span></button>
           </div>

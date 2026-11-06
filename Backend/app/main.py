@@ -12,7 +12,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr, Field
-from sqlalchemy import Boolean, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, create_engine, select
+from sqlalchemy import Boolean, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, create_engine, inspect, select, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker
 
 
@@ -93,6 +93,8 @@ class User(Base):
     __tablename__ = "users"
     id: Mapped[int] = mapped_column(primary_key=True)
     email: Mapped[str] = mapped_column(String(254), unique=True, index=True)
+    full_name: Mapped[str | None] = mapped_column(String(120), default="", nullable=True)
+    address: Mapped[str | None] = mapped_column(Text, nullable=True)
     password_hash: Mapped[str] = mapped_column(String(255))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
@@ -105,6 +107,13 @@ def get_db() -> Generator[Session, None, None]:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     Base.metadata.create_all(engine)
+    # create_all creates new columns on fresh databases but does not alter existing tables.
+    user_columns = {column["name"] for column in inspect(engine).get_columns("users")}
+    with engine.begin() as connection:
+        if "full_name" not in user_columns:
+            connection.execute(text("ALTER TABLE users ADD COLUMN full_name VARCHAR(120) NOT NULL DEFAULT ''"))
+        if "address" not in user_columns:
+            connection.execute(text("ALTER TABLE users ADD COLUMN address TEXT NULL"))
     yield
 
 
@@ -120,6 +129,11 @@ bearer_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 class Credentials(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8, max_length=128)
+
+
+class SignupCredentials(Credentials):
+    full_name: str = Field(min_length=2, max_length=120)
+    address: str = Field(min_length=5, max_length=1000)
 
 
 def issue_token(user: User) -> str:
@@ -140,15 +154,15 @@ def require_user(token: str = Depends(bearer_scheme), db: Session = Depends(get_
 
 
 @app.post("/api/auth/signup", status_code=201, tags=["authentication"])
-def signup(payload: Credentials, db: Session = Depends(get_db)):
+def signup(payload: SignupCredentials, db: Session = Depends(get_db)):
     email = str(payload.email).lower()
     if db.scalar(select(User).where(User.email == email)):
         raise HTTPException(409, "An account with this email already exists")
-    user = User(email=email, password_hash=password_hasher.hash(payload.password))
+    user = User(email=email, full_name=payload.full_name.strip(), address=payload.address.strip(), password_hash=password_hasher.hash(payload.password))
     db.add(user)
     db.commit()
     db.refresh(user)
-    return {"access_token": issue_token(user), "token_type": "bearer", "expires_in": JWT_EXPIRE_MINUTES * 60, "user": {"id": user.id, "email": user.email}}
+    return {"access_token": issue_token(user), "token_type": "bearer", "expires_in": JWT_EXPIRE_MINUTES * 60, "user": {"id": user.id, "email": user.email, "full_name": user.full_name}}
 
 
 @app.post("/api/auth/login", tags=["authentication"])
@@ -158,12 +172,12 @@ def login(payload: Credentials, db: Session = Depends(get_db)):
         raise HTTPException(401, "Email or password is incorrect", headers={"WWW-Authenticate": "Bearer"})
     if not user.is_active:
         raise HTTPException(403, "Account is disabled")
-    return {"access_token": issue_token(user), "token_type": "bearer", "expires_in": JWT_EXPIRE_MINUTES * 60, "user": {"id": user.id, "email": user.email}}
+    return {"access_token": issue_token(user), "token_type": "bearer", "expires_in": JWT_EXPIRE_MINUTES * 60, "user": {"id": user.id, "email": user.email, "full_name": user.full_name}}
 
 
 @app.get("/api/auth/me", tags=["authentication"])
 def current_user(user: User = Depends(require_user)):
-    return {"id": user.id, "email": user.email}
+    return {"id": user.id, "email": user.email, "full_name": user.full_name, "address": user.address}
 
 
 class CartRequest(BaseModel):

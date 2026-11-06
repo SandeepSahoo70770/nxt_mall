@@ -6,6 +6,8 @@ export default function AuthPage() {
   const [mode, setMode] = useState<'signup' | 'login'>('signup')
   const [showPassword, setShowPassword] = useState(false)
   const [message, setMessage] = useState('')
+  const [fullName, setFullName] = useState('')
+  const [address, setAddress] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const apiBase = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
@@ -13,7 +15,8 @@ export default function AuthPage() {
     event.preventDefault()
     setMessage('')
     try {
-      const response = await fetch(`${apiBase}/api/auth/${mode === 'signup' ? 'signup' : 'login'}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) })
+      const payload = mode === 'signup' ? { full_name: fullName, address, email, password } : { email, password }
+      const response = await fetch(`${apiBase}/api/auth/${mode === 'signup' ? 'signup' : 'login'}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
       const result = await response.json() as { access_token?: string; detail?: string; user?: unknown }
       if (!response.ok || !result.access_token) throw new Error(result.detail || 'Unable to authenticate.')
       localStorage.setItem('nxtmall_access_token', result.access_token)
@@ -34,6 +37,10 @@ export default function AuthPage() {
         <div className="auth-heading"><h2>Welcome to NxT Mall</h2><p>Sign in or create an account to continue.</p></div>
         <div className="auth-tabs" role="tablist" aria-label="Account type"><button role="tab" aria-selected={mode==='login'} className={mode==='login'?'active':''} onClick={()=>{setMode('login');setMessage('')}}>Log in</button><button role="tab" aria-selected={mode==='signup'} className={mode==='signup'?'active':''} onClick={()=>{setMode('signup');setMessage('')}}>Sign up</button></div>
         <form className="auth-form" onSubmit={submit}>
+          {mode === 'signup' && <>
+            <label htmlFor="auth-name">Full name</label><input id="auth-name" className="auth-input" type="text" autoComplete="name" minLength={2} maxLength={120} required value={fullName} onChange={e=>setFullName(e.target.value)} placeholder="Enter your full name" />
+            <label htmlFor="auth-address">Address</label><textarea id="auth-address" className="auth-input auth-textarea" autoComplete="street-address" minLength={5} maxLength={1000} required value={address} onChange={e=>setAddress(e.target.value)} placeholder="Enter your full address" />
+          </>}
           <label htmlFor="auth-email">Email</label><input id="auth-email" className="auth-input" type="email" autoComplete="email" required value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@example.com"/>
           <div className="password-label"><label htmlFor="auth-password">Password</label><button type="button" className="forgot-link" onClick={()=>setMessage('Password reset is not connected yet.')}>Forgot password?</button></div>
           <div className="password-field"><input id="auth-password" className="auth-input" type={showPassword?'text':'password'} minLength={8} autoComplete={mode==='login'?'current-password':'new-password'} required value={password} onChange={e=>setPassword(e.target.value)} placeholder="At least 8 characters"/><button type="button" aria-label={showPassword?'Hide password':'Show password'} onClick={()=>setShowPassword(!showPassword)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.2-6 9.5-6 9.5 6 9.5 6-3.2 6-9.5 6-9.5-6-9.5-6Z"/><circle cx="12" cy="12" r="2.5"/></svg></button></div>
