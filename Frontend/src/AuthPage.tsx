@@ -21,7 +21,8 @@ export default function AuthPage() {
       if (!response.ok || !result.access_token) throw new Error(result.detail || 'Unable to authenticate.')
       localStorage.setItem('nxtmall_access_token', result.access_token)
       if (result.user) localStorage.setItem('nxtmall_user', JSON.stringify(result.user))
-      window.location.assign('/')
+      const next = new URLSearchParams(window.location.search).get('next')
+      window.location.assign(next?.startsWith('/') && !next.startsWith('//') ? next : '/')
     } catch (error) { setMessage(error instanceof Error ? error.message : 'Cannot reach the authentication service.') }
   }
   return <main className="auth-page">

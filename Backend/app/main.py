@@ -12,7 +12,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr, Field
-from sqlalchemy import Boolean, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, create_engine, inspect, select, text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, create_engine, func, inspect, select, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker
 
 
@@ -97,6 +97,33 @@ class User(Base):
     address: Mapped[str | None] = mapped_column(Text, nullable=True)
     password_hash: Mapped[str] = mapped_column(String(255))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    role: Mapped[str] = mapped_column(String(20), default="customer", server_default="customer", nullable=False, index=True)
+
+
+class Order(Base):
+    __tablename__ = "orders"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
+    total: Mapped[float] = mapped_column(Numeric(12, 2), default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
+
+
+class Coupon(Base):
+    __tablename__ = "coupons"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    code: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    discount_type: Mapped[str] = mapped_column(String(16))
+    discount_value: Mapped[float] = mapped_column(Numeric(10, 2))
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class StoreSetting(Base):
+    __tablename__ = "store_settings"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    key: Mapped[str] = mapped_column(String(100), unique=True)
+    value: Mapped[str] = mapped_column(Text)
 
 
 def get_db() -> Generator[Session, None, None]:
@@ -114,6 +141,8 @@ async def lifespan(_: FastAPI):
             connection.execute(text("ALTER TABLE users ADD COLUMN full_name VARCHAR(120) NOT NULL DEFAULT ''"))
         if "address" not in user_columns:
             connection.execute(text("ALTER TABLE users ADD COLUMN address TEXT NULL"))
+        if "role" not in user_columns:
+            connection.execute(text("ALTER TABLE users ADD COLUMN role VARCHAR(20) NOT NULL DEFAULT 'customer'"))
     yield
 
 
@@ -153,6 +182,12 @@ def require_user(token: str = Depends(bearer_scheme), db: Session = Depends(get_
     return user
 
 
+def require_admin(user: User = Depends(require_user)) -> User:
+    if user.role != "admin":
+        raise HTTPException(403, "Administrator access is required")
+    return user
+
+
 @app.post("/api/auth/signup", status_code=201, tags=["authentication"])
 def signup(payload: SignupCredentials, db: Session = Depends(get_db)):
     email = str(payload.email).lower()
@@ -175,6 +210,21 @@ def login(payload: Credentials, db: Session = Depends(get_db)):
     return {"access_token": issue_token(user), "token_type": "bearer", "expires_in": JWT_EXPIRE_MINUTES * 60, "user": {"id": user.id, "email": user.email, "full_name": user.full_name}}
 
 
+@app.post("/api/admin/auth/login", tags=["admin authentication"])
+def admin_login(payload: Credentials, db: Session = Depends(get_db)):
+    user = db.scalar(select(User).where(User.email == str(payload.email).lower()))
+    if not user or user.role != "admin" or not password_hasher.verify(payload.password, user.password_hash):
+        raise HTTPException(401, "Admin email or password is incorrect", headers={"WWW-Authenticate": "Bearer"})
+    if not user.is_active:
+        raise HTTPException(403, "Admin account is disabled")
+    return {"access_token": issue_token(user), "token_type": "bearer", "expires_in": JWT_EXPIRE_MINUTES * 60, "user": {"id": user.id, "email": user.email, "full_name": user.full_name}}
+
+
+@app.get("/api/admin/auth/me", tags=["admin authentication"])
+def admin_current_user(user: User = Depends(require_admin)):
+    return {"id": user.id, "email": user.email, "full_name": user.full_name, "address": user.address}
+
+
 @app.get("/api/auth/me", tags=["authentication"])
 def current_user(user: User = Depends(require_user)):
     return {"id": user.id, "email": user.email, "full_name": user.full_name, "address": user.address}
@@ -187,6 +237,40 @@ class CartRequest(BaseModel):
 
 class SubscribeRequest(BaseModel):
     email: EmailStr
+
+
+class AdminProductInput(BaseModel):
+    name: str = Field(min_length=2, max_length=180)
+    category_id: int
+    description: str = Field(max_length=500)
+    price: float = Field(gt=0)
+    old_price: float = Field(gt=0)
+    image: str = Field(min_length=1, max_length=500)
+    stock: int = Field(ge=0)
+    discount: str | None = Field(default=None, max_length=16)
+    active: bool = True
+
+
+class AdminCategoryInput(BaseModel):
+    name: str = Field(min_length=2, max_length=100)
+    image: str = Field(min_length=1, max_length=255)
+
+
+class AdminCouponInput(BaseModel):
+    code: str = Field(min_length=2, max_length=64)
+    discount_type: str = Field(pattern="^(percent|amount)$")
+    discount_value: float = Field(gt=0)
+    active: bool = True
+    expires_at: datetime | None = None
+
+
+class AdminProfileInput(BaseModel):
+    full_name: str = Field(min_length=2, max_length=120)
+    address: str = Field(min_length=5, max_length=1000)
+
+
+class AdminSettingInput(BaseModel):
+    values: dict[str, str]
 
 
 def product_json(product: Product) -> dict:
@@ -295,3 +379,175 @@ def subscribe(payload: SubscribeRequest, db: Session = Depends(get_db)):
     db.add(Subscriber(email=email))
     db.commit()
     return {"message": "Subscription saved"}
+
+
+def admin_product_json(product: Product) -> dict:
+    return {**product_json(product), "category_id": product.category_id, "active": product.active}
+
+
+@app.get("/api/admin/overview")
+def admin_overview(_: User = Depends(require_admin), db: Session = Depends(get_db)):
+    latest = db.scalars(select(Order).order_by(Order.created_at.desc(), Order.id.desc()).limit(6)).all()
+    return {
+        "products": db.scalar(select(func.count(Product.id))) or 0,
+        "customers": db.scalar(select(func.count(User.id)).where(User.role == "customer")) or 0,
+        "orders": db.scalar(select(func.count(Order.id))) or 0,
+        "revenue": float(db.scalar(select(func.coalesce(func.sum(Order.total), 0))) or 0),
+        "recent_orders": [{"id": o.id, "customer": db.get(User, o.user_id).email if o.user_id and db.get(User, o.user_id) else "", "status": o.status, "total": float(o.total), "created_at": o.created_at.isoformat() if o.created_at else None} for o in latest],
+    }
+
+
+@app.get("/api/admin/products")
+def admin_products(_: User = Depends(require_admin), db: Session = Depends(get_db)):
+    return [admin_product_json(p) for p in db.scalars(select(Product).order_by(Product.id.desc())).all()]
+
+
+@app.post("/api/admin/products", status_code=201)
+def admin_create_product(payload: AdminProductInput, _: User = Depends(require_admin), db: Session = Depends(get_db)):
+    if not db.get(Category, payload.category_id):
+        raise HTTPException(404, "Category not found")
+    product = Product(**payload.model_dump())
+    db.add(product)
+    db.commit()
+    db.refresh(product)
+    return admin_product_json(product)
+
+
+@app.put("/api/admin/products/{product_id}")
+def admin_update_product(product_id: int, payload: AdminProductInput, _: User = Depends(require_admin), db: Session = Depends(get_db)):
+    product = db.get(Product, product_id)
+    if not product:
+        raise HTTPException(404, "Product not found")
+    if not db.get(Category, payload.category_id):
+        raise HTTPException(404, "Category not found")
+    for key, value in payload.model_dump().items():
+        setattr(product, key, value)
+    db.commit()
+    db.refresh(product)
+    return admin_product_json(product)
+
+
+@app.delete("/api/admin/products/{product_id}", status_code=204)
+def admin_delete_product(product_id: int, _: User = Depends(require_admin), db: Session = Depends(get_db)):
+    product = db.get(Product, product_id)
+    if not product:
+        raise HTTPException(404, "Product not found")
+    db.delete(product)
+    db.commit()
+
+
+@app.get("/api/admin/categories")
+def admin_categories(_: User = Depends(require_admin), db: Session = Depends(get_db)):
+    return [{"id": c.id, "name": c.name, "image": c.image, "product_count": db.scalar(select(func.count(Product.id)).where(Product.category_id == c.id)) or 0} for c in db.scalars(select(Category).order_by(Category.name)).all()]
+
+
+@app.post("/api/admin/categories", status_code=201)
+def admin_create_category(payload: AdminCategoryInput, _: User = Depends(require_admin), db: Session = Depends(get_db)):
+    category = Category(name=payload.name.strip(), image=payload.image.strip())
+    db.add(category)
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise HTTPException(409, "A category with this name already exists")
+    db.refresh(category)
+    return {"id": category.id, "name": category.name, "image": category.image, "product_count": 0}
+
+
+@app.put("/api/admin/categories/{category_id}")
+def admin_update_category(category_id: int, payload: AdminCategoryInput, _: User = Depends(require_admin), db: Session = Depends(get_db)):
+    category = db.get(Category, category_id)
+    if not category:
+        raise HTTPException(404, "Category not found")
+    category.name = payload.name.strip()
+    category.image = payload.image.strip()
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise HTTPException(409, "A category with this name already exists")
+    db.refresh(category)
+    return {"id": category.id, "name": category.name, "image": category.image, "product_count": db.scalar(select(func.count(Product.id)).where(Product.category_id == category.id)) or 0}
+
+
+@app.delete("/api/admin/categories/{category_id}", status_code=204)
+def admin_delete_category(category_id: int, _: User = Depends(require_admin), db: Session = Depends(get_db)):
+    category = db.get(Category, category_id)
+    if not category:
+        raise HTTPException(404, "Category not found")
+    if db.scalar(select(func.count(Product.id)).where(Product.category_id == category_id)):
+        raise HTTPException(409, "Move or delete this category's products before deleting it")
+    db.delete(category)
+    db.commit()
+
+
+@app.get("/api/admin/customers")
+def admin_customers(_: User = Depends(require_admin), db: Session = Depends(get_db)):
+    return [{"id": u.id, "email": u.email, "full_name": u.full_name or "", "address": u.address or "", "is_active": u.is_active} for u in db.scalars(select(User).where(User.role == "customer").order_by(User.id.desc())).all()]
+
+
+@app.get("/api/admin/orders")
+def admin_orders(_: User = Depends(require_admin), db: Session = Depends(get_db)):
+    return [{"id": o.id, "customer": db.get(User, o.user_id).email if o.user_id and db.get(User, o.user_id) else "", "status": o.status, "total": float(o.total), "created_at": o.created_at.isoformat() if o.created_at else None} for o in db.scalars(select(Order).order_by(Order.id.desc())).all()]
+
+
+@app.patch("/api/admin/orders/{order_id}/status")
+def admin_update_order_status(order_id: int, status: str = Query(pattern="^(pending|processing|shipped|delivered|cancelled)$"), _: User = Depends(require_admin), db: Session = Depends(get_db)):
+    order = db.get(Order, order_id)
+    if not order:
+        raise HTTPException(404, "Order not found")
+    order.status = status
+    db.commit()
+    return {"id": order.id, "status": order.status}
+
+
+@app.get("/api/admin/coupons")
+def admin_coupons(_: User = Depends(require_admin), db: Session = Depends(get_db)):
+    return [{"id": c.id, "code": c.code, "discount_type": c.discount_type, "discount_value": float(c.discount_value), "active": c.active, "expires_at": c.expires_at.isoformat() if c.expires_at else None} for c in db.scalars(select(Coupon).order_by(Coupon.id.desc())).all()]
+
+
+@app.post("/api/admin/coupons", status_code=201)
+def admin_create_coupon(payload: AdminCouponInput, _: User = Depends(require_admin), db: Session = Depends(get_db)):
+    coupon = Coupon(**{**payload.model_dump(), "code": payload.code.strip().upper()})
+    db.add(coupon)
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise HTTPException(409, "A coupon with this code already exists")
+    db.refresh(coupon)
+    return {"id": coupon.id, "code": coupon.code, "discount_type": coupon.discount_type, "discount_value": float(coupon.discount_value), "active": coupon.active, "expires_at": coupon.expires_at.isoformat() if coupon.expires_at else None}
+
+
+@app.delete("/api/admin/coupons/{coupon_id}", status_code=204)
+def admin_delete_coupon(coupon_id: int, _: User = Depends(require_admin), db: Session = Depends(get_db)):
+    coupon = db.get(Coupon, coupon_id)
+    if not coupon:
+        raise HTTPException(404, "Coupon not found")
+    db.delete(coupon)
+    db.commit()
+
+
+@app.get("/api/admin/settings")
+def admin_settings(_: User = Depends(require_admin), db: Session = Depends(get_db)):
+    return {setting.key: setting.value for setting in db.scalars(select(StoreSetting)).all()}
+
+
+@app.put("/api/admin/settings")
+def admin_update_settings(payload: AdminSettingInput, _: User = Depends(require_admin), db: Session = Depends(get_db)):
+    for key, value in payload.values.items():
+        setting = db.scalar(select(StoreSetting).where(StoreSetting.key == key))
+        if setting:
+            setting.value = value
+        else:
+            db.add(StoreSetting(key=key, value=value))
+    db.commit()
+    return {setting.key: setting.value for setting in db.scalars(select(StoreSetting)).all()}
+
+
+@app.put("/api/admin/profile")
+def admin_update_profile(payload: AdminProfileInput, user: User = Depends(require_admin), db: Session = Depends(get_db)):
+    user.full_name = payload.full_name.strip()
+    user.address = payload.address.strip()
+    db.commit()
+    return {"id": user.id, "email": user.email, "full_name": user.full_name, "address": user.address}

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 import brandMark from './assets/nxt-mark.png'
 import AuthPage from './AuthPage'
+import AdminApp from './admin/AdminApp'
 import './App.css'
 
 type Product = {
@@ -52,6 +53,7 @@ function Icon({ name, size = 20 }: { name: string; size?: number }) {
 }
 
 function App() {
+  if (window.location.pathname.startsWith('/admin')) return <AdminApp />
   if (window.location.pathname === '/auth') return <AuthPage />
   const [products, setProducts] = useState<Product[]>([])
   const [categories, setCategories] = useState<Category[]>([])
