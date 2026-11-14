@@ -1,30 +1,32 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
 import brandMark from '../assets/nxt-mark.png'
 import './admin.css'
 
 type Page = 'Dashboard' | 'Products' | 'Orders' | 'Customers' | 'Categories' | 'Coupons' | 'Reports' | 'Settings' | 'Profile'
-type Product = { id: number; name: string; category: string; category_id: number; description: string; price: number; oldPrice: number; rating: string; reviews: string; discount?: string | null; image: string; stock: number; active: boolean }
+type Product = { id: number; name: string; category: string; category_id: number; description: string; price: number; oldPrice: number; rating: string; reviews: string; discount?: string | null; image: string; images: string[]; stock: number; active: boolean }
 type Category = { id: number; name: string; image: string; product_count: number }
 type Customer = { id: number; email: string; full_name: string; address: string; is_active: boolean }
 type Order = { id: number; customer: string; status: string; total: number; created_at: string | null }
 type Coupon = { id: number; code: string; discount_type: string; discount_value: number; active: boolean; expires_at: string | null }
 type Overview = { products: number; customers: number; orders: number; revenue: number; recent_orders: Order[] }
 type Profile = { id: number; email: string; full_name: string | null; address: string | null }
-type ProductForm = { name: string; category_id: string; description: string; price: string; old_price: string; image: string; stock: string; discount: string; active: boolean }
+type ProductForm = { name: string; category_id: string; description: string; price: string; old_price: string; image: string; images: string[]; stock: string; discount: string; active: boolean }
 type CategoryForm = { name: string; image: string }
 type CouponForm = { code: string; discount_type: 'percent' | 'amount'; discount_value: string; active: boolean; expires_at: string }
 
 const apiBase = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+const productImageUrl = (image: string, width = 120) => image.startsWith('/uploads/') ? `${apiBase}${image}` : image.startsWith('/') || image.startsWith('http') ? image : `https://images.unsplash.com/${image}?auto=format&fit=crop&w=${width}&q=75`
 const nav: { label: Page; icon: string }[] = [
   { label: 'Dashboard', icon: '⌂' }, { label: 'Products', icon: '▣' }, { label: 'Orders', icon: '▤' },
   { label: 'Customers', icon: '♙' }, { label: 'Categories', icon: '◫' }, { label: 'Coupons', icon: '％' },
   { label: 'Reports', icon: '⌁' }, { label: 'Settings', icon: '⚙' }, { label: 'Profile', icon: '◎' },
 ]
-const emptyProduct: ProductForm = { name: '', category_id: '', description: '', price: '', old_price: '', image: '', stock: '0', discount: '', active: true }
+const emptyProduct: ProductForm = { name: '', category_id: '', description: '', price: '', old_price: '', image: '', images: [], stock: '0', discount: '', active: true }
 
 async function api<T>(path: string, token: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${apiBase}${path}`, { ...init, headers: { ...(init?.body ? { 'Content-Type': 'application/json' } : {}), Authorization: `Bearer ${token}`, ...init?.headers } })
+  const isFormData = typeof FormData !== 'undefined' && init?.body instanceof FormData
+  const response = await fetch(`${apiBase}${path}`, { ...init, headers: { ...(init?.body && !isFormData ? { 'Content-Type': 'application/json' } : {}), Authorization: `Bearer ${token}`, ...init?.headers } })
   if (response.status === 401) {
     localStorage.removeItem('nxtmall_access_token')
     localStorage.removeItem('nxtmall_user')
@@ -62,10 +64,21 @@ export default function AdminApp() {
   const [notice, setNotice] = useState('')
   const [search, setSearch] = useState('')
   const [productModal, setProductModal] = useState<{ item?: Product; form: ProductForm } | null>(null)
+  const [productImageFiles, setProductImageFiles] = useState<File[]>([])
+  const [savingProduct, setSavingProduct] = useState(false)
+  const [productImagePreviews, setProductImagePreviews] = useState<string[]>([])
+  const [imageDropActive, setImageDropActive] = useState(false)
+  const productImageInput = useRef<HTMLInputElement>(null)
   const [categoryModal, setCategoryModal] = useState<{ item?: Category; form: CategoryForm } | null>(null)
   const [couponModal, setCouponModal] = useState(false)
   const [couponForm, setCouponForm] = useState<CouponForm>({ code: '', discount_type: 'percent', discount_value: '', active: true, expires_at: '' })
   const [profileForm, setProfileForm] = useState({ full_name: '', address: '' })
+
+  useEffect(() => {
+    const previewUrls = productImageFiles.map(file => URL.createObjectURL(file))
+    setProductImagePreviews(previewUrls)
+    return () => previewUrls.forEach(url => URL.revokeObjectURL(url))
+  }, [productImageFiles])
 
   const load = useCallback(async (selected: Page, authToken: string) => {
     setLoading(true); setError('')
@@ -107,10 +120,10 @@ export default function AdminApp() {
 
   const changePage = (next: Page) => { setPage(next); setSearch(''); void load(next, token) }
   const logout = () => { localStorage.removeItem('nxtmall_access_token'); localStorage.removeItem('nxtmall_user'); setProfile(null); setToken(''); setAuthReady(true) }
-  const action = async (work: () => Promise<unknown>, message: string, reloadPage = page) => {
+  const action = async (work: () => Promise<unknown>, message: string, reloadPage = page): Promise<boolean> => {
     setError(''); setNotice('')
-    try { await work(); setNotice(message); await load(reloadPage, token) }
-    catch (e) { setError(e instanceof Error ? e.message : 'The change could not be saved.') }
+    try { await work(); setNotice(message); await load(reloadPage, token); return true }
+    catch (e) { setError(e instanceof Error ? e.message : 'The change could not be saved.'); return false }
   }
 
   const filteredProducts = useMemo(() => products.filter(p => `${p.name} ${p.category}`.toLowerCase().includes(search.toLowerCase())), [products, search])
@@ -120,10 +133,34 @@ export default function AdminApp() {
   const saveProduct = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault(); if (!productModal) return
     const f = productModal.form
-    const payload = { name: f.name, category_id: Number(f.category_id), description: f.description, price: Number(f.price), old_price: Number(f.old_price), image: f.image, stock: Number(f.stock), discount: f.discount || null, active: f.active }
     const path = productModal.item ? `/api/admin/products/${productModal.item.id}` : '/api/admin/products'
-    await action(() => api(path, token, { method: productModal.item ? 'PUT' : 'POST', body: JSON.stringify(payload) }), productModal.item ? 'Product updated.' : 'Product added.')
-    setProductModal(null)
+    setSavingProduct(true)
+    let saved = false
+    try {
+      saved = await action(async () => {
+        let images = [...f.images]
+        if (productImageFiles.length) {
+          const formData = new FormData()
+          productImageFiles.forEach(file => formData.append('files', file))
+          const uploaded = await api<{ images: string[] }>('/api/admin/uploads/products', token, { method: 'POST', body: formData })
+          images.push(...uploaded.images)
+        }
+        if (!images.length && f.image.trim()) images.push(f.image.trim())
+        images = [...new Set(images.filter(Boolean))]
+        if (!images.length) throw new Error('Add at least one product image.')
+        const payload = { name: f.name, category_id: Number(f.category_id), description: f.description, price: Number(f.price), old_price: Number(f.old_price), image: images[0], images, stock: Number(f.stock), discount: f.discount || null, active: f.active }
+        return api(path, token, { method: productModal.item ? 'PUT' : 'POST', body: JSON.stringify(payload) })
+      }, productModal.item ? 'Product updated.' : 'Product added.', 'Products')
+    } finally { setSavingProduct(false) }
+    if (saved) { setProductImageFiles([]); setProductModal(null) }
+  }
+  const chooseProductImages = (selectedFiles: FileList | File[]) => {
+    const incoming = Array.from(selectedFiles)
+    if (!incoming.length) return
+    if (incoming.some(file => !['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(file.type))) { setError('Choose PNG, JPG, WebP, or GIF images.'); return }
+    if (incoming.some(file => file.size > 8 * 1024 * 1024)) { setError('Each image must be 8 MB or smaller.'); return }
+    if (productModal && productModal.form.images.length + productImageFiles.length + incoming.length > 8) { setError('A product can have up to 8 images.'); return }
+    setError(''); setProductImageFiles(previous => [...previous, ...incoming])
   }
   const saveCategory = async (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); if (!categoryModal) return; const path = categoryModal.item ? `/api/admin/categories/${categoryModal.item.id}` : '/api/admin/categories'; await action(() => api(path, token, { method: categoryModal.item ? 'PUT' : 'POST', body: JSON.stringify(categoryModal.form) }), categoryModal.item ? 'Category updated.' : 'Category added.', 'Categories'); setCategoryModal(null) }
   const saveCoupon = async (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); const payload = { ...couponForm, discount_value: Number(couponForm.discount_value), expires_at: couponForm.expires_at || null }; await action(() => api('/api/admin/coupons', token, { method: 'POST', body: JSON.stringify(payload) }), 'Coupon added.', 'Coupons'); setCouponModal(false); setCouponForm({ code: '', discount_type: 'percent', discount_value: '', active: true, expires_at: '' }) }
@@ -150,7 +187,7 @@ export default function AdminApp() {
               <section className="admin-panel status-panel"><div className="panel-heading"><div><h2>Order status</h2><p>Current distribution</p></div><span className="panel-icon">◷</span></div>{orders.length ? <div className="status-list">{['pending','processing','shipped','delivered','cancelled'].map(status => <div key={status}><span><i className={`status-dot ${status}`}/>{status}</span><strong>{orders.filter(o => o.status === status).length}</strong></div>)}</div> : <div className="chart-empty compact"><strong>No orders yet</strong><p>This summary will populate from live order records.</p></div>}</section></div>
             <section className="admin-panel data-panel"><div className="panel-heading"><div><h2>Recent orders</h2><p>Latest orders saved in MySQL</p></div><button className="text-link" onClick={() => changePage('Orders')}>View all →</button></div><OrderTable rows={overview?.recent_orders || []} onStatus={async (id, status) => action(() => api(`/api/admin/orders/${id}/status?status=${status}`, token, { method: 'PATCH' }), 'Order status updated.', 'Dashboard')}/></section>
           </>}
-          {page === 'Products' && <section className="admin-panel data-panel"><PanelHeading title="Product catalog" detail={`${products.length} records`} action="Add product" onAction={() => setProductModal({ form: { ...emptyProduct, category_id: categories[0] ? String(categories[0].id) : '' } })}/><div className="table-scroll"><table><thead><tr><th>Product</th><th>Category</th><th>Price</th><th>Stock</th><th>Visibility</th><th>Actions</th></tr></thead><tbody>{filteredProducts.map(p => <tr key={p.id}><td><div className="product-cell"><img src={p.image.startsWith('http') || p.image.startsWith('/') ? p.image : `https://images.unsplash.com/${p.image}?auto=format&fit=crop&w=120&q=75`} alt=""/><span><b>{p.name}</b><small>ID {p.id}</small></span></div></td><td>{p.category}</td><td><b>{money(p.price)}</b><small className="table-muted"> / {money(p.oldPrice)}</small></td><td><span className={p.stock < 5 ? 'stock low' : 'stock'}>{p.stock} in stock</span></td><td><span className={`visibility ${p.active ? 'shown' : 'hidden'}`}>{p.active ? 'Active' : 'Hidden'}</span></td><td><div className="row-actions"><button onClick={() => setProductModal({ item: p, form: { name: p.name, category_id: String(p.category_id), description: p.description, price: String(p.price), old_price: String(p.oldPrice), image: p.image, stock: String(p.stock), discount: p.discount || '', active: p.active } })}>Edit</button><button className="danger-action" onClick={() => { if (confirm(`Delete ${p.name}?`)) void action(() => api(`/api/admin/products/${p.id}`, token, { method: 'DELETE' }), 'Product deleted.') }}>Delete</button></div></td></tr>)}</tbody></table>{!filteredProducts.length && <Empty title="No products found" body="The product list is read from your live catalog. Add a product or adjust the search."/>}</div></section>}
+          {page === 'Products' && <section className="admin-panel data-panel"><PanelHeading title="Product catalog" detail={`${products.length} records`} action="Add product" onAction={() => { setProductImageFiles([]); setProductModal({ form: { ...emptyProduct, category_id: categories[0] ? String(categories[0].id) : '' } }) }}/><div className="table-scroll"><table><thead><tr><th>Product</th><th>Category</th><th>Price</th><th>Stock</th><th>Visibility</th><th>Actions</th></tr></thead><tbody>{filteredProducts.map(p => <tr key={p.id}><td><div className="product-cell"><img src={productImageUrl(p.image)} alt=""/><span><b>{p.name}</b><small>ID {p.id}</small></span></div></td><td>{p.category}</td><td><b>{money(p.price)}</b><small className="table-muted"> / {money(p.oldPrice)}</small></td><td><span className={p.stock < 5 ? 'stock low' : 'stock'}>{p.stock} in stock</span></td><td><span className={`visibility ${p.active ? 'shown' : 'hidden'}`}>{p.active ? 'Active' : 'Hidden'}</span></td><td><div className="row-actions"><button onClick={() => { setProductImageFiles([]); setProductModal({ item: p, form: { name: p.name, category_id: String(p.category_id), description: p.description, price: String(p.price), old_price: String(p.oldPrice), image: p.image, images: p.images?.length ? p.images : [p.image], stock: String(p.stock), discount: p.discount || '', active: p.active } }) }}>Edit</button><button className="danger-action" onClick={() => { if (confirm(`Delete ${p.name}?`)) void action(() => api(`/api/admin/products/${p.id}`, token, { method: 'DELETE' }), 'Product deleted.') }}>Delete</button></div></td></tr>)}</tbody></table>{!filteredProducts.length && <Empty title="No products found" body="The product list is read from your live catalog. Add a product or adjust the search."/>}</div></section>}
           {page === 'Categories' && <section className="admin-panel data-panel"><PanelHeading title="Categories" detail={`${categories.length} records`} action="Add category" onAction={() => setCategoryModal({ form: { name: '', image: '' } })}/><div className="table-scroll"><table><thead><tr><th>Category</th><th>Image asset</th><th>Products</th><th>Actions</th></tr></thead><tbody>{categories.filter(c => `${c.name} ${c.image}`.toLowerCase().includes(search.toLowerCase())).map(c => <tr key={c.id}><td><b>{c.name}</b><small className="table-muted">ID {c.id}</small></td><td>{c.image}</td><td>{c.product_count}</td><td><div className="row-actions"><button onClick={() => setCategoryModal({ item: c, form: { name: c.name, image: c.image } })}>Edit</button><button className="danger-action" onClick={() => { if (confirm(`Delete category ${c.name}?`)) void action(() => api(`/api/admin/categories/${c.id}`, token, { method: 'DELETE' }), 'Category deleted.', 'Categories') }}>Delete</button></div></td></tr>)}</tbody></table>{!categories.length && <Empty title="No categories found" body="No category records exist in the database yet."/>}</div></section>}
           {page === 'Customers' && <section className="admin-panel data-panel"><PanelHeading title="Customer accounts" detail={`${customers.length} records`}/><div className="table-scroll"><table><thead><tr><th>Customer</th><th>Email</th><th>Delivery address</th><th>Account</th></tr></thead><tbody>{filteredCustomers.map(c => <tr key={c.id}><td><b>{c.full_name || 'Name not provided'}</b><small className="table-muted">Customer #{c.id}</small></td><td>{c.email}</td><td className="address-cell">{c.address || 'No address saved'}</td><td><span className={`visibility ${c.is_active ? 'shown' : 'hidden'}`}>{c.is_active ? 'Active' : 'Disabled'}</span></td></tr>)}</tbody></table>{!filteredCustomers.length && <Empty title="No customers found" body="Customer rows appear here after people register."/>}</div></section>}
           {page === 'Orders' && <section className="admin-panel data-panel"><PanelHeading title="Orders" detail={`${orders.length} records`}/><OrderTable rows={filteredOrders} onStatus={async (id, status) => action(() => api(`/api/admin/orders/${id}/status?status=${status}`, token, { method: 'PATCH' }), 'Order status updated.')}/></section>}
@@ -160,7 +197,25 @@ export default function AdminApp() {
           {page === 'Profile' && <section className="admin-panel form-panel profile-panel"><div className="panel-heading"><div><h2>Administrator profile</h2><p>Your existing JWT account profile</p></div></div><div className="profile-email"><span className="profile-avatar">{profile?.full_name?.slice(0,1).toUpperCase() || 'N'}</span><span><b>{profile?.full_name || 'NxT Mall account'}</b><small>{profile?.email}</small></span><span className="visibility shown">Signed in</span></div><form className="admin-form" onSubmit={e => { e.preventDefault(); void action(async () => { const updated = await api<Profile>('/api/admin/profile', token, { method: 'PUT', body: JSON.stringify(profileForm) }); setProfile(updated) }, 'Profile saved.', 'Profile') }}><label>Full name<input required minLength={2} value={profileForm.full_name} onChange={e => setProfileForm({ ...profileForm, full_name: e.target.value })}/></label><label>Delivery address<textarea required minLength={5} value={profileForm.address} onChange={e => setProfileForm({ ...profileForm, address: e.target.value })}/></label><button className="primary-button">Save profile</button></form></section>}
         </>}</div>
     </main>
-    {productModal && <Modal title={productModal.item ? 'Edit product' : 'Add product'} onClose={() => setProductModal(null)}><form className="admin-form modal-form" onSubmit={saveProduct}><label>Product name<input required minLength={2} value={productModal.form.name} onChange={e => setProductModal({ ...productModal, form: { ...productModal.form, name: e.target.value } })}/></label><label>Category<select required value={productModal.form.category_id} onChange={e => setProductModal({ ...productModal, form: { ...productModal.form, category_id: e.target.value } })}><option value="">Select category</option>{categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label><label>Description<input value={productModal.form.description} onChange={e => setProductModal({ ...productModal, form: { ...productModal.form, description: e.target.value } })}/></label><div className="form-row"><label>Price (₹)<input required type="number" min="1" step="0.01" value={productModal.form.price} onChange={e => setProductModal({ ...productModal, form: { ...productModal.form, price: e.target.value } })}/></label><label>Original price (₹)<input required type="number" min="1" step="0.01" value={productModal.form.old_price} onChange={e => setProductModal({ ...productModal, form: { ...productModal.form, old_price: e.target.value } })}/></label></div><div className="form-row"><label>Stock<input required type="number" min="0" value={productModal.form.stock} onChange={e => setProductModal({ ...productModal, form: { ...productModal.form, stock: e.target.value } })}/></label><label>Discount label<input value={productModal.form.discount} onChange={e => setProductModal({ ...productModal, form: { ...productModal.form, discount: e.target.value } })} placeholder="Optional"/></label></div><label>Image URL or asset path<input required value={productModal.form.image} onChange={e => setProductModal({ ...productModal, form: { ...productModal.form, image: e.target.value } })}/></label><label className="check-label"><input type="checkbox" checked={productModal.form.active} onChange={e => setProductModal({ ...productModal, form: { ...productModal.form, active: e.target.checked } })}/> Visible in storefront</label><div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setProductModal(null)}>Cancel</button><button className="primary-button">Save product</button></div></form></Modal>}
+    {productModal && <Modal title={productModal.item ? 'Edit product' : 'Add product'} onClose={() => { if (!savingProduct) { setProductImageFiles([]); setError(''); setProductModal(null) } }}>
+      <form className="admin-form modal-form" onSubmit={saveProduct}>
+        {error && <div className="admin-alert error" role="alert">{error}</div>}
+        <label>Product name<input required minLength={2} value={productModal.form.name} onChange={e => setProductModal({ ...productModal, form: { ...productModal.form, name: e.target.value } })}/></label>
+        <label>Category<select required value={productModal.form.category_id} onChange={e => setProductModal({ ...productModal, form: { ...productModal.form, category_id: e.target.value } })}><option value="">Select category</option>{categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
+        <label>Description<input value={productModal.form.description} onChange={e => setProductModal({ ...productModal, form: { ...productModal.form, description: e.target.value } })}/></label>
+        <div className="form-row"><label>Price (₹)<input required type="number" min="1" step="0.01" value={productModal.form.price} onChange={e => setProductModal({ ...productModal, form: { ...productModal.form, price: e.target.value } })}/></label><label>Original price (₹)<input required type="number" min="1" step="0.01" value={productModal.form.old_price} onChange={e => setProductModal({ ...productModal, form: { ...productModal.form, old_price: e.target.value } })}/></label></div>
+        <div className="form-row"><label>Stock<input required type="number" min="0" value={productModal.form.stock} onChange={e => setProductModal({ ...productModal, form: { ...productModal.form, stock: e.target.value } })}/></label><label>Discount label<input value={productModal.form.discount} onChange={e => setProductModal({ ...productModal, form: { ...productModal.form, discount: e.target.value } })} placeholder="Optional"/></label></div>
+        <div className={`product-image-dropzone ${imageDropActive ? 'is-dragging' : ''} ${productImagePreviews.length || productModal.form.images.length ? 'has-preview' : ''}`} role="button" tabIndex={0} aria-label="Choose or drop product images" onClick={() => productImageInput.current?.click()} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); productImageInput.current?.click() } }} onDragOver={e => { e.preventDefault(); setImageDropActive(true) }} onDragLeave={e => { e.preventDefault(); setImageDropActive(false) }} onDrop={e => { e.preventDefault(); setImageDropActive(false); chooseProductImages(e.dataTransfer.files) }}>
+          <input ref={productImageInput} className="image-file-input" type="file" multiple accept="image/png,image/jpeg,image/webp,image/gif" onClick={e => e.stopPropagation()} onChange={e => { if (e.currentTarget.files) chooseProductImages(e.currentTarget.files); e.currentTarget.value = '' }}/>
+          {productImagePreviews[0] || productModal.form.images[0] ? <img className="product-image-preview" src={productImagePreviews[0] || productImageUrl(productModal.form.images[0], 500)} alt="Product image preview"/> : <span className="image-upload-icon" aria-hidden="true"><svg viewBox="0 0 48 48" fill="none"><rect x="5" y="7" width="38" height="34" rx="7"/><circle cx="18" cy="19" r="4"/><path d="m8 36 11-10 7 6 6-5 8 8"/><path d="M24 3v13m-5-5 5-5 5 5"/></svg></span>}
+          <strong>{productImageFiles.length ? `${productImageFiles.length} new image${productImageFiles.length === 1 ? '' : 's'} selected` : productModal.form.images.length ? `${productModal.form.images.length} image${productModal.form.images.length === 1 ? '' : 's'} selected` : 'Drop product images here'}</strong><span className="image-upload-caption">Drag and drop multiple images, or click to browse</span><span className="image-upload-action">Add images</span><small>PNG, JPG, WebP, or GIF · Up to 8 images · 8 MB each</small>
+        </div>
+        <div className="product-image-gallery">{productModal.form.images.map((image, index) => <div className="product-image-thumb" key={`saved-${image}-${index}`}><img src={productImageUrl(image, 180)} alt={`Product image ${index + 1}`}/><button type="button" aria-label={`Remove image ${index + 1}`} onClick={() => { const images = productModal.form.images.filter((_, i) => i !== index); setProductModal({ ...productModal, form: { ...productModal.form, images, image: images[0] || '' } }) }}>×</button><small>{index === 0 ? 'Main image' : `Image ${index + 1}`}</small></div>)}{productImagePreviews.map((preview, index) => <div className="product-image-thumb" key={`new-${index}`}><img src={preview} alt={`New product image ${index + 1}`}/><button type="button" aria-label={`Remove new image ${index + 1}`} onClick={() => setProductImageFiles(files => files.filter((_, i) => i !== index))}>×</button><small>{productModal.form.images.length + index === 0 ? 'Main image' : `Image ${productModal.form.images.length + index + 1}`}</small></div>)}</div>
+        <label>Or use image URL / asset path<input value={productModal.form.image} onChange={e => { const image = e.target.value; const remaining = productModal.form.images.filter(path => path !== productModal.form.image); setProductModal({ ...productModal, form: { ...productModal.form, image, images: image ? [image, ...remaining] : remaining } }) }} placeholder="Optional when uploading images"/></label>
+        <label className="check-label"><input type="checkbox" checked={productModal.form.active} onChange={e => setProductModal({ ...productModal, form: { ...productModal.form, active: e.target.checked } })}/> Visible in storefront</label>
+        <div className="modal-actions"><button type="button" className="secondary-button" disabled={savingProduct} onClick={() => { setProductImageFiles([]); setError(''); setProductModal(null) }}>Cancel</button><button className="primary-button" disabled={savingProduct}>{savingProduct ? 'Saving product…' : 'Save product to database'}</button></div>
+      </form>
+    </Modal>}
     {categoryModal && <Modal title={categoryModal.item ? 'Edit category' : 'Add category'} onClose={() => setCategoryModal(null)}><form className="admin-form modal-form" onSubmit={saveCategory}><label>Category name<input required value={categoryModal.form.name} onChange={e => setCategoryModal({ ...categoryModal, form: { ...categoryModal.form, name: e.target.value } })}/></label><label>Image asset name<input required value={categoryModal.form.image} onChange={e => setCategoryModal({ ...categoryModal, form: { ...categoryModal.form, image: e.target.value } })} placeholder="Enter an existing or uploaded image path"/></label><div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setCategoryModal(null)}>Cancel</button><button className="primary-button">Save category</button></div></form></Modal>}
     {couponModal && <Modal title="Create coupon" onClose={() => setCouponModal(false)}><form className="admin-form modal-form" onSubmit={saveCoupon}><label>Coupon code<input required value={couponForm.code} onChange={e => setCouponForm({ ...couponForm, code: e.target.value.toUpperCase() })}/></label><div className="form-row"><label>Discount type<select value={couponForm.discount_type} onChange={e => setCouponForm({ ...couponForm, discount_type: e.target.value as CouponForm['discount_type'] })}><option value="percent">Percent</option><option value="amount">Fixed amount</option></select></label><label>Discount value<input required type="number" min="0.01" step="0.01" value={couponForm.discount_value} onChange={e => setCouponForm({ ...couponForm, discount_value: e.target.value })}/></label></div><label>Expiry (optional)<input type="date" value={couponForm.expires_at} onChange={e => setCouponForm({ ...couponForm, expires_at: e.target.value ? `${e.target.value}T23:59:59` : '' })}/></label><div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setCouponModal(false)}>Cancel</button><button className="primary-button">Save coupon</button></div></form></Modal>}
   </div>

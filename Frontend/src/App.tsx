@@ -16,6 +16,7 @@ type Product = {
   reviews: string
   discount?: string
   image: string
+  images?: string[]
 }
 
 type Category = { id: number; name: string; image: string }
@@ -34,6 +35,7 @@ const getSessionKey = () => {
 const sessionQuery = () => `session_key=${encodeURIComponent(getSessionKey())}`
 
 const imageUrl = (id: string, width = 600) => `https://images.unsplash.com/${id}?auto=format&fit=crop&w=${width}&q=85`
+const productImageUrl = (path: string, width = 800) => path.startsWith('/uploads/') ? `${apiBase}${path}` : path.startsWith('/') || path.startsWith('http') ? path : imageUrl(path, width)
 const formatINR = (amount: number) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(amount)
 
 function Icon({ name, size = 20 }: { name: string; size?: number }) {
@@ -79,6 +81,7 @@ function App() {
   const [showAllProducts, setShowAllProducts] = useState(false)
   const [wishlist, setWishlist] = useState<Set<number>>(new Set())
   const [wishlistView, setWishlistView] = useState(false)
+  const [productGalleryIndexes, setProductGalleryIndexes] = useState<Record<number, number>>({})
 
   useEffect(() => {
     let active = true
@@ -114,7 +117,24 @@ function App() {
       }
     }
     void load()
-    return () => { active = false }
+    const refreshProducts = async () => {
+      try {
+        const response = await fetch(`${apiBase}/api/products`)
+        if (!response.ok) return
+        const productData = await response.json() as Product[]
+        if (active) setProducts(productData)
+      } catch {
+        // Keep the last successfully loaded catalog if a background refresh fails.
+      }
+    }
+    const refreshWhenVisible = () => { if (document.visibilityState === 'visible') void refreshProducts() }
+    window.addEventListener('focus', refreshProducts)
+    document.addEventListener('visibilitychange', refreshWhenVisible)
+    return () => {
+      active = false
+      window.removeEventListener('focus', refreshProducts)
+      document.removeEventListener('visibilitychange', refreshWhenVisible)
+    }
   }, [])
 
   useEffect(() => {
@@ -307,11 +327,16 @@ function App() {
             <div className="product-grid">
               {catalogLoading && <div className="empty-results" role="status">Loading products…</div>}
               {!catalogLoading && catalogError && products.length === 0 && <div className="empty-results" role="status"><strong>Store data is unavailable.</strong><span>Start the API and connect MySQL to load the catalog.</span></div>}
-              {visibleProducts.map((product) => <article className="product-card" key={product.id}>
-                <div className="product-image"><img src={product.image.startsWith('/') || product.image.startsWith('http') ? product.image : imageUrl(product.image, 800)} alt={product.name} loading="lazy" />{product.discount && <span className="discount-badge">{product.discount}</span>}<button className={wishlist.has(product.id) ? 'wishlist-button saved' : 'wishlist-button'} onClick={() => toggleWishlist(product.id)} aria-label={`${wishlist.has(product.id) ? 'Remove from' : 'Add to'} wishlist: ${product.name}`}><Icon name="heart" size={19} /></button></div>
-                <div className="product-information"><div><p className="product-category">{product.category}</p><h3>{product.name}</h3><p className="product-description">{product.description}</p><div className="rating"><span>★</span><strong>{product.rating}</strong><small>({product.reviews})</small></div></div><div className="product-price"><strong>{formatINR(product.price)}</strong><del>{formatINR(product.oldPrice)}</del></div></div>
-                <button className="add-to-cart" onClick={() => void addToCart(product.id)}><Icon name="cart" size={16} /> Add to Cart</button>
-              </article>)}
+              {visibleProducts.map((product) => {
+                const gallery = product.images?.length ? product.images : [product.image]
+                const imageIndex = Math.min(productGalleryIndexes[product.id] || 0, gallery.length - 1)
+                const moveImage = (next: number) => setProductGalleryIndexes(current => ({ ...current, [product.id]: (next + gallery.length) % gallery.length }))
+                return <article className="product-card" key={product.id}>
+                  <div className="product-image"><img src={productImageUrl(gallery[imageIndex])} alt={`${product.name}, image ${imageIndex + 1} of ${gallery.length}`} loading="lazy" />{product.discount && <span className="discount-badge">{product.discount}</span>}<button className={wishlist.has(product.id) ? 'wishlist-button saved' : 'wishlist-button'} onClick={() => toggleWishlist(product.id)} aria-label={`${wishlist.has(product.id) ? 'Remove from' : 'Add to'} wishlist: ${product.name}`}><Icon name="heart" size={19} /></button>{gallery.length > 1 && <div className="product-gallery-navigation"><button type="button" onClick={() => moveImage(imageIndex - 1)} aria-label={`Previous ${product.name} image`}>‹</button><div>{gallery.map((_, index) => <button type="button" key={index} className={imageIndex === index ? 'selected' : ''} onClick={() => moveImage(index)} aria-label={`Show ${product.name} image ${index + 1}`} aria-pressed={imageIndex === index}/>)}</div><button type="button" onClick={() => moveImage(imageIndex + 1)} aria-label={`Next ${product.name} image`}>›</button></div>}</div>
+                  <div className="product-information"><div><p className="product-category">{product.category}</p><h3>{product.name}</h3><p className="product-description">{product.description}</p><div className="rating"><span>★</span><strong>{product.rating}</strong><small>({product.reviews})</small></div></div><div className="product-price"><strong>{formatINR(product.price)}</strong><del>{formatINR(product.oldPrice)}</del></div></div>
+                  <button className="add-to-cart" onClick={() => void addToCart(product.id)}><Icon name="cart" size={16} /> Add to Cart</button>
+                </article>
+              })}
               {!catalogLoading && !catalogError && visibleProducts.length === 0 && <div className="empty-results"><strong>{wishlistView ? 'Your wishlist is empty.' : 'No products found.'}</strong><span>Try another category or search.</span><button onClick={() => { setQuery(''); setActiveCategory('All products'); setWishlistView(false); setShowAllProducts(false) }}>Show featured products</button></div>}
             </div>
           </div>

@@ -15,8 +15,8 @@ FastAPI backend backed by MySQL. Products, categories, hero slides, cart items, 
 
 2. Copy `.env.example` to `.env`, set the MySQL password in `DATABASE_URL`, and replace `JWT_SECRET` with a long random value. `.env` is ignored by Git.
 3. In this folder run `uv sync`.
-4. Create the tables and load the catalog that already exists in the storefront with `uv run python -m app.seed`. The seed is repeatable and skips existing rows.
-5. Start the API with `uv run uvicorn app.main:app --reload`.
+4. Create the tables and load categories and hero content with `uv run python -m app.seed`. Products are not seeded; add real products through Admin → Products. To remove any untouched rows from the old demo catalog, run `uv run python -m app.remove_demo_products` once.
+5. Start the API with `uv run uvicorn app.main:app --reload` or `uv run fastapi dev main.py`. Both commands start the same API from `app.main`.
 6. Set `Frontend/.env.local` to `VITE_API_BASE_URL=http://localhost:8000`, then start Vite from `Frontend/` with `npm run dev`.
 7. Visit `http://localhost:8000/api/health` to confirm the API can reach MySQL and `/docs` to inspect endpoints.
 

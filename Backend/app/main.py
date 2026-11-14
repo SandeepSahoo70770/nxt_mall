@@ -1,22 +1,28 @@
 """NxT Mall API. Persistent commerce data is stored in MySQL."""
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
+import logging
 import os
 import secrets
+from pathlib import Path
 from typing import Generator
+from uuid import uuid4
 
 from dotenv import load_dotenv
 import jwt
 from pwdlib import PasswordHash
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, create_engine, func, inspect, select, text
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker
 
 
 load_dotenv()
+logger = logging.getLogger(__name__)
 
 DATABASE_URL = os.getenv("DATABASE_URL", "mysql+pymysql://nxtmall:nxtmall@127.0.0.1:3306/nxt_mall?charset=utf8mb4")
 engine = create_engine(DATABASE_URL, pool_pre_ping=True, pool_recycle=1800)
@@ -50,6 +56,16 @@ class Product(Base):
     stock: Mapped[int] = mapped_column(Integer, default=0)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     category: Mapped[Category] = relationship(back_populates="products")
+    gallery: Mapped[list["ProductImage"]] = relationship(back_populates="product", cascade="all, delete-orphan", order_by="ProductImage.sort_order")
+
+
+class ProductImage(Base):
+    __tablename__ = "product_images"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    product_id: Mapped[int] = mapped_column(ForeignKey("products.id", ondelete="CASCADE"), index=True)
+    image: Mapped[str] = mapped_column(String(500))
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    product: Mapped[Product] = relationship(back_populates="gallery")
 
 
 class CartItem(Base):
@@ -148,6 +164,10 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title="NxT Mall API", version="1.0.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=os.getenv("CORS_ORIGINS", "http://localhost:5173").split(","), allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+UPLOAD_ROOT = Path(__file__).resolve().parents[1] / "uploads"
+PRODUCT_UPLOAD_DIR = UPLOAD_ROOT / "products"
+PRODUCT_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=UPLOAD_ROOT), name="uploads")
 
 JWT_SECRET = os.getenv("JWT_SECRET", "development-only-change-this-secret")
 JWT_EXPIRE_MINUTES = int(os.getenv("JWT_EXPIRE_MINUTES", "60"))
@@ -245,7 +265,8 @@ class AdminProductInput(BaseModel):
     description: str = Field(max_length=500)
     price: float = Field(gt=0)
     old_price: float = Field(gt=0)
-    image: str = Field(min_length=1, max_length=500)
+    image: str | None = Field(default=None, max_length=500)
+    images: list[str] = Field(default_factory=list, max_length=8)
     stock: int = Field(ge=0)
     discount: str | None = Field(default=None, max_length=16)
     active: bool = True
@@ -274,7 +295,8 @@ class AdminSettingInput(BaseModel):
 
 
 def product_json(product: Product) -> dict:
-    return {"id": product.id, "name": product.name, "category": product.category.name, "description": product.description, "price": float(product.price), "oldPrice": float(product.old_price), "rating": product.rating, "reviews": product.reviews, "discount": product.discount, "image": product.image, "stock": product.stock}
+    images = [image.image for image in product.gallery] or [product.image]
+    return {"id": product.id, "name": product.name, "category": product.category.name, "description": product.description, "price": float(product.price), "oldPrice": float(product.old_price), "rating": product.rating, "reviews": product.reviews, "discount": product.discount, "image": images[0], "images": images, "stock": product.stock}
 
 
 @app.get("/", tags=["health"])
@@ -402,14 +424,62 @@ def admin_products(_: User = Depends(require_admin), db: Session = Depends(get_d
     return [admin_product_json(p) for p in db.scalars(select(Product).order_by(Product.id.desc())).all()]
 
 
+@app.post("/api/admin/uploads/products", tags=["admin products"])
+async def admin_upload_product_images(files: list[UploadFile] = File(...), _: User = Depends(require_admin)):
+    if not files or len(files) > 8:
+        raise HTTPException(400, "Upload between 1 and 8 product images")
+
+    signatures = {
+        "png": lambda data: data.startswith(b"\x89PNG\r\n\x1a\n"),
+        "jpg": lambda data: data.startswith(b"\xff\xd8\xff"),
+        "webp": lambda data: data.startswith(b"RIFF") and data[8:12] == b"WEBP",
+        "gif": lambda data: data.startswith((b"GIF87a", b"GIF89a")),
+    }
+    validated: list[tuple[bytes, str]] = []
+    total_bytes = 0
+    for file in files:
+        contents = await file.read(8 * 1024 * 1024 + 1)
+        if not contents:
+            raise HTTPException(400, "An uploaded image is empty")
+        if len(contents) > 8 * 1024 * 1024:
+            raise HTTPException(413, "Each image must be 8 MB or smaller")
+        total_bytes += len(contents)
+        if total_bytes > 32 * 1024 * 1024:
+            raise HTTPException(413, "The combined upload must be 32 MB or smaller")
+        extension = next((ext for ext, valid in signatures.items() if valid(contents)), None)
+        if not extension:
+            raise HTTPException(415, "Upload valid PNG, JPG, WebP, or GIF images")
+        validated.append((contents, extension))
+
+    image_paths = []
+    for contents, extension in validated:
+        filename = f"{uuid4().hex}.{extension}"
+        (PRODUCT_UPLOAD_DIR / filename).write_bytes(contents)
+        image_paths.append(f"/uploads/products/{filename}")
+    return {"images": image_paths}
+
+
 @app.post("/api/admin/products", status_code=201)
 def admin_create_product(payload: AdminProductInput, _: User = Depends(require_admin), db: Session = Depends(get_db)):
     if not db.get(Category, payload.category_id):
         raise HTTPException(404, "Category not found")
-    product = Product(**payload.model_dump())
+    image_paths = list(dict.fromkeys([*payload.images, *([payload.image] if payload.image else [])]))
+    if not image_paths:
+        raise HTTPException(422, "Upload at least one product image")
+    product = Product(**payload.model_dump(exclude={"image", "images"}), image=image_paths[0])
+    product.gallery = [ProductImage(image=image, sort_order=index) for index, image in enumerate(image_paths)]
     db.add(product)
-    db.commit()
-    db.refresh(product)
+    try:
+        db.commit()
+        db.refresh(product)
+    except IntegrityError as exc:
+        db.rollback()
+        logger.exception("Integrity error while creating product")
+        raise HTTPException(409, "Product could not be saved. Check the selected category and product data, then try again.") from exc
+    except SQLAlchemyError as exc:
+        db.rollback()
+        logger.exception("Database error while creating product")
+        raise HTTPException(500, "MySQL could not save this product. Check the Backend terminal for the database error.") from exc
     return admin_product_json(product)
 
 
@@ -420,10 +490,24 @@ def admin_update_product(product_id: int, payload: AdminProductInput, _: User = 
         raise HTTPException(404, "Product not found")
     if not db.get(Category, payload.category_id):
         raise HTTPException(404, "Category not found")
-    for key, value in payload.model_dump().items():
+    image_paths = list(dict.fromkeys([*payload.images, *([payload.image] if payload.image else [])]))
+    if not image_paths:
+        raise HTTPException(422, "Keep or upload at least one product image")
+    for key, value in payload.model_dump(exclude={"image", "images"}).items():
         setattr(product, key, value)
-    db.commit()
-    db.refresh(product)
+    product.image = image_paths[0]
+    product.gallery = [ProductImage(image=image, sort_order=index) for index, image in enumerate(image_paths)]
+    try:
+        db.commit()
+        db.refresh(product)
+    except IntegrityError as exc:
+        db.rollback()
+        logger.exception("Integrity error while updating product %s", product_id)
+        raise HTTPException(409, "Product could not be updated. Check the selected category and product data, then try again.") from exc
+    except SQLAlchemyError as exc:
+        db.rollback()
+        logger.exception("Database error while updating product %s", product_id)
+        raise HTTPException(500, "MySQL could not update this product. Check the Backend terminal for the database error.") from exc
     return admin_product_json(product)
 
 
